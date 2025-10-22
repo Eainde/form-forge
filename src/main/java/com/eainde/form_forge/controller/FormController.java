@@ -24,10 +24,7 @@ public class FormController {
 
     @GetMapping("/user-profile")
     public JsonFormResponse getUserProfileForm() {
-        // 1. Fetch dynamic metadata from a database or another service.
         Map<String, Map<String, Object>> dynamicData = getDynamicDataForUserProfile();
-
-        // 2. Generate the form.
         return jsonFormGenerator.generate(UserProfileDto.class, dynamicData);
     }
 
@@ -74,7 +71,6 @@ public class FormController {
         // The key "employees" must match the placeholder field name in EmployeeTrainingFormDto.
         dynamicMetadata.put("employees", Map.of("data", employeeList));
 
-        // 3. Generate the form.
         return jsonFormGenerator.generate(EmployeeTrainingFormDto.class, dynamicMetadata);
     }
 
@@ -103,45 +99,37 @@ public class FormController {
      */
     @GetMapping("/employee-details-with-rules")
     public JsonFormResponse getEmployeeDetailsFormWithRules() {
-        // 1. Fetch employee data.
-        /*List<Map<String, Object>> employeeList = List.of(
-                Map.of("employeeId", "101", "employeeName", "Alice Smith"),
-                Map.of("employeeId", "102", "employeeName", "Bob Johnson")
-        );*/
-
-        // 2. Prepare the dynamic data.
         Map<String, Map<String, Object>> dynamicMetadata = new HashMap<>();
-        // In your FormController...
 
         List<Map<String, Object>> employeeList = new ArrayList<>();
 
-// Employee 1: No special rules
+        // Employee 1: No special rules
         Map<String, Object> alice = new HashMap<>();
         alice.put("employeeId", "101");
         alice.put("employeeName", "Alice Smith");
         employeeList.add(alice);
 
-// Employee 2: Has a special rule on one of their fields
+        // Employee 2: Has a special rule on one of their fields
         Map<String, Object> bob = new HashMap<>();
         bob.put("employeeId", "102");
         bob.put("employeeName", "Bob Johnson");
 
-// --- Define the rule for Bob ---
+        // --- Define the rule for Bob ---
         Map<String, Object> bobsRules = new HashMap<>();
         Map<String, Object> emailRule = new HashMap<>();
         emailRule.put("effect", "SHOW");
-// The conditionField is also relative to the template DTO
+        // The conditionField is also relative to the template DTO
         emailRule.put("conditionField", "lastName");
         emailRule.put("expectedValue", "Johnson");
 
-// Attach the rule to the "email" field specifically for Bob
+        // Attach the rule to the "email" field specifically for Bob
         bobsRules.put("email", emailRule);
 
-// Add the rules map to Bob's data
+        // Add the rules map to Bob's data
         bob.put("fieldRules", bobsRules);
         employeeList.add(bob);
 
-// ... prepare dynamicMetadata as before ...
+        // ... prepare dynamicMetadata as before ...
         dynamicMetadata.put("employees", Map.of("data", employeeList));
 
         // 3. Generate the form.
