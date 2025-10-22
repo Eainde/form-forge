@@ -12,7 +12,7 @@ public @interface LayoutItem {
     /**
      * The type of layout to create (HORIZONTAL or VERTICAL).
      */
-    LayoutType type();
+    LayoutType type() default LayoutType.VERTICAL;
 
     /**
      * An array of field names (strings) from the DTO that should be

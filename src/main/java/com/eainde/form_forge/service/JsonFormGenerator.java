@@ -41,7 +41,6 @@ public class JsonFormGenerator {
             throw new IllegalArgumentException("The target class must be annotated with @JsonForm.");
         }
 
-        // Initialize the root schema and uischema objects.
         JsonSchema schema = new JsonSchema();
         schema.setType("object");
         schema.setTitle(classAnnotation.title());
@@ -50,15 +49,13 @@ public class JsonFormGenerator {
         UiSchema uischema = new UiSchema();
         List<String> requiredFields = new ArrayList<>();
 
-        // Start the recursive processing from the root class.
-        processClassFields(targetClass, null, schema, uischema.getElements(), requiredFields, "#/properties/");
+        // Pass the root DTO class (targetClass) for rule parsing context.
+        processClassFields(targetClass, classAnnotation, uischema.getElements(), requiredFields, "#/properties/", schema, dynamicMetadata, targetClass, null, null);
 
-        // Set the 'required' array in the schema if any fields were marked as required.
         if (!requiredFields.isEmpty()) {
             schema.setRequired(requiredFields);
         }
 
-        // Apply any dynamic data passed in at runtime.
         applyDynamicMetadata(schema, uischema, dynamicMetadata, targetClass);
         return new JsonFormResponse(schema, uischema);
     }
@@ -74,24 +71,30 @@ public class JsonFormGenerator {
      * @param parentRequiredFields The list of required fields for the parent schema.
      * @param currentScope         The current JSON scope path (e.g., "#/properties/").
      */
-    private void processClassFields(Class<?> targetClass, JsonFormGroup groupAnnotation, JsonSchema parentSchema, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope) {
-        // Determine if a custom layout is defined on the class's @JsonForm or the subgroup's @JsonFormGroup annotation.
-        Layout layout = null;
-        if (groupAnnotation != null) {
-            layout = groupAnnotation.layout();
-        } else {
-            JsonForm classAnnotation = targetClass.getAnnotation(JsonForm.class);
-            if (classAnnotation != null) {
-                layout = classAnnotation.layout();
-            }
-        }
+    private void processClassFields(Class<?> targetClass, JsonForm classAnnotation, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope, JsonSchema parentSchema, Map<String, Map<String, Object>> dynamicMetadata, Class<?> rootDtoClass, Map<String, Object> fieldRules, String dynamicPropertyPrefix) {
+        Layout layout = (classAnnotation != null) ? classAnnotation.layout() : null;
 
-        // If a custom layout with at least one item is defined, use the new processing logic.
         if (layout != null && layout.value().length > 0) {
-            processWithCustomLayout(layout, targetClass, parentSchema, parentUiElements, parentRequiredFields, currentScope);
+            Map<String, Field> fieldMap = new HashMap<>();
+            for (Field field : targetClass.getDeclaredFields()) {
+                fieldMap.put(field.getName(), field);
+            }
+            for (LayoutItem item : layout.value()) {
+                List<UiSchemaLayoutElement> currentContainer = parentUiElements;
+                if (item.type() == LayoutType.HORIZONTAL) {
+                    UiSchemaHorizontalLayoutElement hLayout = new UiSchemaHorizontalLayoutElement();
+                    parentUiElements.add(hLayout);
+                    currentContainer = hLayout.getElements();
+                }
+                for (String fieldName : item.fields()) {
+                    Field field = fieldMap.get(fieldName);
+                    if (field != null) {
+                        processSingleField(field, parentSchema, currentContainer, parentRequiredFields, currentScope, dynamicMetadata, rootDtoClass, fieldRules, dynamicPropertyPrefix);
+                    }
+                }
+            }
         } else {
-            // Otherwise, fall back to the default logic which renders all fields in a simple vertical layout.
-            processWithDefaultLayout(targetClass, parentSchema, parentUiElements, parentRequiredFields, currentScope);
+            processWithDefaultLayout(targetClass, parentSchema, parentUiElements, parentRequiredFields, currentScope, dynamicMetadata, rootDtoClass, fieldRules, dynamicPropertyPrefix);
         }
     }
 
@@ -106,7 +109,7 @@ public class JsonFormGenerator {
      * @param parentRequiredFields The list of required fields for the parent schema.
      * @param currentScope         The current JSON scope path.
      */
-    private void processWithCustomLayout(Layout layout, Class<?> targetClass, JsonSchema parentSchema, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope) {
+    /*private void processWithCustomLayout(Layout layout, Class<?> targetClass, JsonSchema parentSchema, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope, Map<String, Map<String, Object>> dynamicMetadata) {
         // Create a mutable map of all declared fields in the class for easy lookup and to track which fields have been processed.
         Map<String, Field> fieldMap = new HashMap<>(Arrays.stream(targetClass.getDeclaredFields())
                 .collect(Collectors.toMap(Field::getName, field -> field)));
@@ -129,7 +132,7 @@ public class JsonFormGenerator {
             for (String fieldName : item.fields()) {
                 Field field = fieldMap.get(fieldName);
                 if (field != null) {
-                    processSingleField(field, parentSchema, layoutElements, parentRequiredFields, currentScope);
+                    processSingleField(field, parentSchema, layoutElements, parentRequiredFields, currentScope,dynamicMetadata);
                     // Remove the field from the map so it isn't processed again as a "remaining" field.
                     fieldMap.remove(fieldName);
                 }
@@ -139,9 +142,9 @@ public class JsonFormGenerator {
         // After processing all custom layouts, process any remaining fields that were not part of any layout item.
         // These will be added vertically at the end of the form/group.
         for (Field remainingField : fieldMap.values()) {
-            processSingleField(remainingField, parentSchema, parentUiElements, parentRequiredFields, currentScope);
+            processSingleField(remainingField, parentSchema, parentUiElements, parentRequiredFields, currentScope,dynamicMetadata);
         }
-    }
+    }*/
 
     /**
      * Processes fields in their default declaration order, creating a simple vertical list of controls.
@@ -153,10 +156,9 @@ public class JsonFormGenerator {
      * @param parentRequiredFields The list of required fields for the parent schema.
      * @param currentScope         The current JSON scope path.
      */
-    private void processWithDefaultLayout(Class<?> targetClass, JsonSchema parentSchema, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope) {
-        // Simple loop through all declared fields in their natural order.
+    private void processWithDefaultLayout(Class<?> targetClass, JsonSchema parentSchema, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope, Map<String, Map<String, Object>> dynamicMetadata, Class<?> rootDtoClass, Map<String, Object> fieldRules, String dynamicPropertyPrefix) {
         for (Field field : targetClass.getDeclaredFields()) {
-            processSingleField(field, parentSchema, parentUiElements, parentRequiredFields, currentScope);
+            processSingleField(field, parentSchema, parentUiElements, parentRequiredFields, currentScope, dynamicMetadata, rootDtoClass, fieldRules, dynamicPropertyPrefix);
         }
     }
 
@@ -170,35 +172,96 @@ public class JsonFormGenerator {
      * @param parentRequiredFields The list of required fields for the parent schema.
      * @param currentScope         The current JSON scope path.
      */
-    private void processSingleField(Field field, JsonSchema parentSchema, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope) {
+    private void processSingleField(Field field, JsonSchema parentSchema, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope, Map<String, Map<String, Object>> dynamicMetadata, Class<?> rootDtoClass, Map<String, Object> fieldRules, String dynamicPropertyPrefix) {
         JsonFormField fieldAnnotation = field.getAnnotation(JsonFormField.class);
         JsonFormGroup groupAnnotation = field.getAnnotation(JsonFormGroup.class);
+        JsonFormDynamicSection dynamicSectionAnnotation = field.getAnnotation(JsonFormDynamicSection.class);
 
         if (groupAnnotation != null) {
-            // A group is now always a UI-only construct that flattens its data fields into the parent.
+            String fieldName = field.getName();
+            Class<?> nestedDtoClass = field.getType();
+            JsonSchema groupSchema = new JsonSchema();
+            groupSchema.setType("object");
+            groupSchema.setTitle(groupAnnotation.label());
+            List<String> groupRequiredFields = new ArrayList<>();
+            parentSchema.getProperties().put(fieldName, groupSchema);
             UiSchemaGroupElement uiGroup = new UiSchemaGroupElement();
             uiGroup.setLabel(groupAnnotation.label());
             parentUiElements.add(uiGroup);
-
-            // Recurse, passing the PARENT schema and scope to flatten the properties.
-            processClassFields(field.getType(), groupAnnotation, parentSchema, uiGroup.getElements(), parentRequiredFields, currentScope);
-
+            JsonForm nestedClassAnnotation = nestedDtoClass.getAnnotation(JsonForm.class);
+            // Pass the rootDtoClass, fieldRules, and prefix down the recursion.
+            processClassFields(nestedDtoClass, nestedClassAnnotation, uiGroup.getElements(), groupRequiredFields, currentScope + fieldName + "/properties/", groupSchema, dynamicMetadata, rootDtoClass, fieldRules, dynamicPropertyPrefix);
+            if (!groupRequiredFields.isEmpty()) {
+                groupSchema.setRequired(groupRequiredFields);
+            }
         } else if (fieldAnnotation != null) {
-            // This field is a standard form control.
             String fieldName = field.getName();
-
-            // Create the schema property for this field.
             SchemaProperty schemaProperty = createSchemaProperty(fieldAnnotation, field.getType());
             parentSchema.getProperties().put(fieldName, schemaProperty);
             if (fieldAnnotation.required()) {
                 parentRequiredFields.add(fieldName);
             }
-
-            // Create the UI control element for this field.
-            UiSchemaElement uiElement = createUiElement(fieldAnnotation, field, currentScope + fieldName);
+            UiSchemaElement uiElement = createUiElement(fieldAnnotation, field, currentScope + fieldName, rootDtoClass);
             parentUiElements.add(uiElement);
+
+            // --- NEW LOGIC FOR DYNAMIC RULES ---
+            // Check if a rule was passed down for this specific field.
+            if (fieldRules != null && fieldRules.containsKey(field.getName())) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> ruleData = (Map<String, Object>) fieldRules.get(field.getName());
+                Rule rule = buildDynamicRule(ruleData, currentScope, dynamicPropertyPrefix, rootDtoClass);
+                if (rule != null) {
+                    uiElement.setRule(rule);
+                }
+            }
+
+        } else if (dynamicSectionAnnotation != null) {
+            processDynamicSection(field, parentSchema, parentUiElements, parentRequiredFields, currentScope, dynamicMetadata, rootDtoClass);
         }
-        // If a field has neither annotation, it is ignored.
+    }
+
+    /**
+     * Handles the generation of a dynamic form section based on the @JsonFormDynamicSection annotation.
+     */
+    private void processDynamicSection(Field field, JsonSchema parentSchema, List<UiSchemaLayoutElement> parentUiElements, List<String> parentRequiredFields, String currentScope, Map<String, Map<String, Object>> dynamicMetadata, Class<?> rootDtoClass) {
+        JsonFormDynamicSection dynamicSectionAnnotation = field.getAnnotation(JsonFormDynamicSection.class);
+        String placeholderFieldName = field.getName();
+        Map<String, Object> sectionData = dynamicMetadata.get(placeholderFieldName);
+        if (sectionData == null || !(sectionData.get("data") instanceof List)) return;
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) sectionData.get("data");
+        Class<?> itemDto = dynamicSectionAnnotation.itemDto();
+
+        for (Map<String, Object> itemData : items) {
+            String key = String.valueOf(itemData.get(dynamicSectionAnnotation.propertyKeyField()));
+            String label = String.valueOf(itemData.get(dynamicSectionAnnotation.labelField()));
+            String dynamicItemKey = dynamicSectionAnnotation.propertyKeyPrefix() + key;
+
+            // Check for field-specific rules within this item's data.
+            @SuppressWarnings("unchecked")
+            Map<String, Object> fieldRules = (Map<String, Object>) itemData.get("fieldRules");
+
+            JsonSchema itemSchema = new JsonSchema();
+            itemSchema.setType("object");
+            itemSchema.setTitle(label);
+            parentSchema.getProperties().put(dynamicItemKey, itemSchema);
+
+            UiSchemaGroupElement itemGroup = new UiSchemaGroupElement();
+            itemGroup.setLabel(label);
+            parentUiElements.add(itemGroup);
+
+            JsonForm itemDtoAnnotation = itemDto.getAnnotation(JsonForm.class);
+            String newScope = currentScope + dynamicItemKey + "/properties/";
+            List<String> itemRequiredFields = new ArrayList<>();
+
+            // Pass the item-specific rules and prefix down the recursive call.
+            processClassFields(itemDto, itemDtoAnnotation, itemGroup.getElements(), itemRequiredFields, newScope, itemSchema, dynamicMetadata, rootDtoClass, fieldRules, dynamicItemKey + "_");
+
+            if (!itemRequiredFields.isEmpty()) {
+                itemSchema.setRequired(itemRequiredFields);
+            }
+        }
     }
 
     /**
@@ -227,27 +290,29 @@ public class JsonFormGenerator {
      * @param scope           The JSON scope path for this control (e.g., "#/properties/firstName").
      * @return A configured {@link UiSchemaElement} instance.
      */
-    private UiSchemaElement createUiElement(JsonFormField fieldAnnotation, Field field, String scope) {
+    private UiSchemaElement createUiElement(JsonFormField fieldAnnotation, Field field, String scope, Class<?> rootDtoClass) {
         UiSchemaElement uiElement = new UiSchemaElement();
         uiElement.setScope(scope);
         uiElement.setLabel(fieldAnnotation.label());
 
-        // Handle special cases for control types, like multi-line text areas.
         if (fieldAnnotation.controlType() == UiControlType.TEXT_AREA) {
             uiElement.setOptions(Map.of("multi", true));
         }
-        // Handle generic options string.
         uiElement.setOptionsFromString(fieldAnnotation.options());
 
-        // Check for and process a conditional visibility/enablement rule.
         JsonFormRule ruleAnnotation = field.getAnnotation(JsonFormRule.class);
         if (ruleAnnotation != null) {
             Rule rule = new Rule();
             rule.setEffect(ruleAnnotation.effect());
             Condition condition = new Condition();
-            condition.setScope("#/properties/" + ruleAnnotation.conditionField());
-            // Parse the expected value into its correct type (boolean, integer, etc.)
-            Object parsedValue = parseExpectedValue(ruleAnnotation.expectedValue(), field.getDeclaringClass(), ruleAnnotation.conditionField());
+
+            // Fix: Check if the condition field is on the root or nested.
+            // This logic is simplified; a real implementation would need to know the 'level' of the DTO.
+            // For now, assume condition fields are on the root DTO for static rules.
+            String conditionScope = "#/properties/" + ruleAnnotation.conditionField();
+            condition.setScope(conditionScope);
+
+            Object parsedValue = parseExpectedValue(ruleAnnotation.expectedValue(), rootDtoClass, ruleAnnotation.conditionField());
             condition.setSchema(new ConditionSchema(parsedValue));
             rule.setCondition(condition);
             uiElement.setRule(rule);
@@ -265,15 +330,11 @@ public class JsonFormGenerator {
      */
     private void applyDynamicMetadata(JsonSchema schema, UiSchema uiSchema, Map<String, Map<String, Object>> dynamicMetadata, Class<?> rootDtoClass) {
         dynamicMetadata.forEach((fieldName, properties) -> {
-            // Find the schema property for the given field name.
             SchemaNode schemaNode = schema.getProperties().get(fieldName);
-            // We only apply metadata to simple properties, not nested objects.
             if (schemaNode == null || !(schemaNode instanceof SchemaProperty)) {
                 return;
             }
             SchemaProperty schemaProperty = (SchemaProperty) schemaNode;
-
-            // Iterate over the dynamic properties for this field (e.g., "enum", "label").
             properties.forEach((key, value) -> {
                 switch (key) {
                     case "enum":
@@ -282,37 +343,15 @@ public class JsonFormGenerator {
                         }
                         break;
                     case "label":
-                        // If a label is provided dynamically, update it in both the UI schema and the data schema.
-                        findUiElement(uiSchema.getElements(), "#/properties/" + fieldName)
-                                .ifPresent(el -> el.setLabel(String.valueOf(value)));
+                        findUiElement(uiSchema.getElements(), "#/properties/" + fieldName).ifPresent(el -> el.setLabel(String.valueOf(value)));
                         schemaProperty.setTitle(String.valueOf(value));
-                        break;
-                    case "description":
-                        schemaProperty.setDescription(String.valueOf(value));
                         break;
                     case "rule":
                         if (value instanceof Map) {
                             Map<String, Object> ruleData = (Map<String, Object>) value;
                             findUiElement(uiSchema.getElements(), "#/properties/" + fieldName).ifPresent(uiElement -> {
-                                Rule rule = new Rule();
-
-                                Object effect = ruleData.get("effect");
-                                if (effect instanceof RuleEffect) {
-                                    rule.setEffect((RuleEffect) effect);
-                                } else if (effect instanceof String) {
-                                    rule.setEffect(RuleEffect.valueOf((String) effect));
-                                }
-
-                                String conditionField = (String) ruleData.get("conditionField");
-                                Object expectedValue = ruleData.get("expectedValue");
-
-                                if (conditionField != null && expectedValue != null) {
-                                    Condition condition = new Condition();
-                                    condition.setScope("#/properties/" + conditionField);
-                                    // Use the root DTO class to correctly find the condition field for type parsing.
-                                    Object parsedValue = parseExpectedValue(String.valueOf(expectedValue), rootDtoClass, conditionField);
-                                    condition.setSchema(new ConditionSchema(parsedValue));
-                                    rule.setCondition(condition);
+                                Rule rule = buildDynamicRule(ruleData, "#/properties/", null, rootDtoClass);
+                                if (rule != null) {
                                     uiElement.setRule(rule);
                                 }
                             });
@@ -321,6 +360,42 @@ public class JsonFormGenerator {
                 }
             });
         });
+    }
+
+    private Rule buildDynamicRule(Map<String, Object> ruleData, String currentScope, String dynamicPropertyPrefix, Class<?> rootDtoClass) {
+        String conditionField = (String) ruleData.get("conditionField");
+        Object expectedValue = ruleData.get("expectedValue");
+        Object effectObj = ruleData.get("effect");
+
+        if (conditionField == null || expectedValue == null || effectObj == null) {
+            return null;
+        }
+
+        Rule rule = new Rule();
+        if (effectObj instanceof RuleEffect) {
+            rule.setEffect((RuleEffect) effectObj);
+        } else if (effectObj instanceof String) {
+            rule.setEffect(RuleEffect.valueOf(((String) effectObj).toUpperCase()));
+        }
+
+        Condition condition = new Condition();
+        // Construct the fully dynamic scope for the condition.
+        // currentScope = #/properties/emp_101/properties/
+        // dynamicPropertyPrefix = emp_101_
+        // conditionField = lastName
+        // We need to find the base scope: #/properties/
+        String baseScope = currentScope.substring(0, currentScope.indexOf("/properties/") + "/properties/".length());
+
+        // This assumes the condition field is within the same dynamic item.
+        // A more complex implementation could check if the field is "global" (on root) or "local" (in the item).
+        // For now, assume it's local to the item.
+        String dynamicConditionScope = baseScope + dynamicPropertyPrefix + conditionField;
+        condition.setScope(dynamicConditionScope);
+
+        Object parsedValue = parseExpectedValue(String.valueOf(expectedValue), rootDtoClass, conditionField);
+        condition.setSchema(new ConditionSchema(parsedValue));
+        rule.setCondition(condition);
+        return rule;
     }
 
     /**
